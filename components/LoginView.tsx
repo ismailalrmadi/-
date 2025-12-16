@@ -20,19 +20,15 @@ const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [recoveryStep, setRecoveryStep] = useState<'INPUT' | 'SENT'>('INPUT');
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
-    // Simulate network delay
-    setTimeout(() => {
-      const employees = getEmployees();
+    try {
+      const employees = await getEmployees();
       
       const normalizedUser = username.trim();
-      
-      // Fallback for initial admin login if no user found with that name
-      // In a real app, you'd seed the DB with an admin user.
       const isAdminUser = normalizedUser.toLowerCase() === 'admin';
       
       const employee = employees.find(emp => emp.name === normalizedUser);
@@ -42,15 +38,12 @@ const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
       let userRole: UserRole = 'USER';
 
       if (employee) {
-        // Check stored password (simple string comparison for this demo)
-        // Default to '123' if password field is missing in old data
         const storedPassword = employee.password || '123';
         if (password === storedPassword) {
           isValidUser = true;
           userRole = employee.role;
         }
       } else if (isAdminUser) {
-        // Fallback hardcoded admin if not in DB list
         if (password === 'admin123' || password.length >= 4) {
            isValidUser = true;
            userRole = 'ADMIN';
@@ -64,14 +57,17 @@ const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
         onLogin(normalizedUser, userRole);
       } else {
         setError('اسم المستخدم أو كلمة المرور غير صحيحة');
-        setLoading(false);
       }
-    }, 800);
+    } catch (err) {
+      console.error(err);
+      setError('حدث خطأ أثناء الاتصال. يرجى المحاولة لاحقاً.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleForgotPassword = (e: React.FormEvent) => {
     e.preventDefault();
-    // Simulate sending recovery email
     setTimeout(() => {
       setRecoveryStep('SENT');
     }, 1000);

@@ -16,14 +16,17 @@ const LeavesView: React.FC<LeavesViewProps> = ({ workerName }) => {
   const [endDate, setEndDate] = useState('');
   const [reason, setReason] = useState('');
 
-  useEffect(() => {
-    const allLeaves = getLeaveRequests();
-    // Filter to show only current user's leaves
+  const loadLeaves = async () => {
+    const allLeaves = await getLeaveRequests();
     const myLeaves = allLeaves.filter(l => l.employeeName === workerName);
     setLeaves(myLeaves);
+  };
+
+  useEffect(() => {
+    loadLeaves();
   }, [workerName, isModalOpen]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (new Date(startDate) > new Date(endDate)) {
@@ -41,12 +44,13 @@ const LeavesView: React.FC<LeavesViewProps> = ({ workerName }) => {
       status: 'Pending'
     };
 
-    saveNewLeaveRequest(newRequest);
+    await saveNewLeaveRequest(newRequest);
     setIsModalOpen(false);
     setStartDate('');
     setEndDate('');
     setReason('');
     alert("تم تقديم طلب الإجازة بنجاح");
+    loadLeaves();
   };
 
   return (

@@ -13,7 +13,10 @@ import {
   Permission,
   CalendarEvent
 } from '../types';
+import { db, isFirebaseEnabled } from './firebase';
+import { collection, getDocs, doc, setDoc, deleteDoc, query, where } from 'firebase/firestore';
 
+// Keys
 const STORAGE_KEY_RECORDS = 'attendance_records_v1';
 const STORAGE_KEY_GEOFENCES = 'geofences_v1';
 const STORAGE_KEY_CONFIG = 'workshop_config_v1';
@@ -27,21 +30,85 @@ const STORAGE_KEY_ROLES = 'role_configs_v1';
 const STORAGE_KEY_CALENDAR_EVENTS = 'calendar_events_v1';
 
 // --- Helpers ---
-const getFromStorage = <T>(key: string, defaultData: T): T => {
-  const data = localStorage.getItem(key);
-  try {
-    return data ? JSON.parse(data) : defaultData;
-  } catch (e) {
-    console.error(`Error parsing data for key ${key}`, e);
-    return defaultData;
+const getFromStorage = async <T>(key: string, defaultData: T): Promise<T> => {
+  if (isFirebaseEnabled() && db) {
+    try {
+      // For config (single document)
+      if (key === STORAGE_KEY_CONFIG) {
+         const snapshot = await getDocs(collection(db, key));
+         if (!snapshot.empty) return snapshot.docs[0].data() as T;
+         return defaultData;
+      }
+      
+      // For collections (arrays)
+      const snapshot = await getDocs(collection(db, key));
+      if (snapshot.empty) return defaultData;
+      return snapshot.docs.map(d => d.data()) as unknown as T;
+    } catch (e) {
+      console.error("Firebase Read Error:", e);
+      return defaultData;
+    }
+  } else {
+    // Fallback to LocalStorage (Simulated Async)
+    const data = localStorage.getItem(key);
+    try {
+      return data ? JSON.parse(data) : defaultData;
+    } catch (e) {
+      return defaultData;
+    }
   }
 };
 
-const saveToStorage = <T>(key: string, data: T): void => {
-  localStorage.setItem(key, JSON.stringify(data));
+const saveToStorage = async <T>(key: string, data: T, id?: string): Promise<void> => {
+  if (isFirebaseEnabled() && db) {
+    try {
+      if (Array.isArray(data)) {
+         // This is tricky with Firestore as it's collection-based, not array-blob based.
+         // For this migration, we will save individual items if ID is provided, 
+         // OR we assume the caller is passing the WHOLE array and we might have to overwrite.
+         // BUT, to keep it simple and compatible with previous code structure:
+         // We will NOT save the whole array at once in Firestore usually.
+         // However, the previous code passed the whole array 'updated'.
+         // To make this work with Firestore properly, we should save ONE item at a time.
+         // *Hotfix*: The calling functions below are updated to handle single item saves/deletes where possible,
+         // or we accept that for now we might rely on specific collection logic below.
+      } else {
+         // Single config object
+         await setDoc(doc(db, key, 'main_config'), data as any);
+      }
+    } catch (e) {
+      console.error("Firebase Save Error:", e);
+    }
+  } else {
+    localStorage.setItem(key, JSON.stringify(data));
+  }
 };
 
-// --- Session (Login/Remember Me) ---
+// Helper to save single document to collection
+const saveDocument = async (collectionName: string, docId: string, data: any) => {
+  if (isFirebaseEnabled() && db) {
+    await setDoc(doc(db, collectionName, docId), data);
+  } else {
+    // LocalStorage emulation for array
+    const list = await getFromStorage<any[]>(collectionName, []);
+    const index = list.findIndex((i: any) => i.id === docId);
+    if (index >= 0) list[index] = data;
+    else list.push(data);
+    localStorage.setItem(collectionName, JSON.stringify(list));
+  }
+}
+
+const deleteDocument = async (collectionName: string, docId: string) => {
+  if (isFirebaseEnabled() && db) {
+    await deleteDoc(doc(db, collectionName, docId));
+  } else {
+     const list = await getFromStorage<any[]>(collectionName, []);
+     const newList = list.filter((i: any) => i.id !== docId);
+     localStorage.setItem(collectionName, JSON.stringify(newList));
+  }
+}
+
+// --- Session (Login/Remember Me) - Keep LocalStorage for Session ---
 export const saveSession = (user: string, role: UserRole): void => {
   localStorage.setItem(STORAGE_KEY_SESSION, JSON.stringify({ user, role, timestamp: Date.now() }));
 };
@@ -51,7 +118,6 @@ export const getSession = (): { user: string, role: UserRole } | null => {
   if (!session) return null;
   try {
     const parsed = JSON.parse(session);
-    // Ensure backwards compatibility or default to USER if role missing
     if (!parsed.role) parsed.role = 'USER';
     return parsed;
   } catch {
@@ -64,7 +130,7 @@ export const clearSession = (): void => {
 };
 
 // --- Roles & Permissions ---
-export const getRoleConfigs = (): RoleConfig[] => {
+export const getRoleConfigs = async (): Promise<RoleConfig[]> => {
   const defaultRoles: RoleConfig[] = [
     { 
       role: 'ADMIN', 
@@ -83,15 +149,21 @@ export const getRoleConfigs = (): RoleConfig[] => {
     },
     { 
       role: 'USER', 
-      permissions: [] // Users typically don't access dashboard, but if they did, it would be empty
+      permissions: [] 
     }
   ];
-  return getFromStorage<RoleConfig[]>(STORAGE_KEY_ROLES, defaultRoles);
+  // In Firestore, we store these as individual docs in 'role_configs_v1'
+  // But since it's a small fixed list, retrieving all is fine
+  return await getFromStorage<RoleConfig[]>(STORAGE_KEY_ROLES, defaultRoles);
 };
 
-export const saveRoleConfigs = (configs: RoleConfig[]): void => {
-  saveToStorage(STORAGE_KEY_ROLES, configs);
-  saveAuditLog({
+export const saveRoleConfigs = async (configs: RoleConfig[]): Promise<void> => {
+  // Save each role config individually
+  for (const config of configs) {
+    await saveDocument(STORAGE_KEY_ROLES, config.role, config);
+  }
+  
+  await saveAuditLog({
     id: Date.now().toString(),
     action: "تحديث الصلاحيات",
     user: getSession()?.user || "System",
@@ -100,26 +172,38 @@ export const saveRoleConfigs = (configs: RoleConfig[]): void => {
   });
 };
 
-export const hasPermission = (userRole: UserRole, permission: Permission): boolean => {
-  if (userRole === 'ADMIN') return true; // Hardcoded fallback for safety
-  const configs = getRoleConfigs();
+export const hasPermission = async (userRole: UserRole, permission: Permission): Promise<boolean> => {
+  if (userRole === 'ADMIN') return true; 
+  const configs = await getRoleConfigs();
   const config = configs.find(c => c.role === userRole);
   return config ? config.permissions.includes(permission) : false;
 };
 
 // --- Config ---
-export const getWorkshopConfig = (): WorkshopConfig => {
-  return getFromStorage<WorkshopConfig>(STORAGE_KEY_CONFIG, {
+export const getWorkshopConfig = async (): Promise<WorkshopConfig> => {
+  const defaults = {
     name: "ورشة العمل الرئيسية",
-    center: { latitude: 24.7136, longitude: 46.6753 }, // Riyadh default
+    center: { latitude: 24.7136, longitude: 46.6753 }, 
     radiusMeters: 500,
     qrCodeValue: "WORKSHOP-SECRET-1"
-  });
+  };
+  // Special handler for single config doc
+  if (isFirebaseEnabled() && db) {
+     const snapshot = await getDocs(collection(db, STORAGE_KEY_CONFIG));
+     if (!snapshot.empty) return snapshot.docs[0].data() as WorkshopConfig;
+     return defaults;
+  }
+  return await getFromStorage<WorkshopConfig>(STORAGE_KEY_CONFIG, defaults);
 };
 
-export const saveWorkshopConfig = (config: WorkshopConfig): void => {
-  saveToStorage(STORAGE_KEY_CONFIG, config);
-  saveAuditLog({
+export const saveWorkshopConfig = async (config: WorkshopConfig): Promise<void> => {
+  if (isFirebaseEnabled() && db) {
+     await setDoc(doc(db, STORAGE_KEY_CONFIG, 'main_config'), config);
+  } else {
+     saveToStorage(STORAGE_KEY_CONFIG, config);
+  }
+  
+  await saveAuditLog({
     id: Date.now().toString(),
     action: "تحديث الإعدادات",
     user: "Admin",
@@ -129,7 +213,7 @@ export const saveWorkshopConfig = (config: WorkshopConfig): void => {
 };
 
 export const calculateDistance = (coord1: Coordinates, coord2: Coordinates): number => {
-  const R = 6371e3; // metres
+  const R = 6371e3; 
   const φ1 = coord1.latitude * Math.PI / 180;
   const φ2 = coord2.latitude * Math.PI / 180;
   const Δφ = (coord2.latitude - coord1.latitude) * Math.PI / 180;
@@ -144,16 +228,16 @@ export const calculateDistance = (coord1: Coordinates, coord2: Coordinates): num
 };
 
 // --- Records ---
-export const getRecords = (): AttendanceRecord[] => {
-  return getFromStorage<AttendanceRecord[]>(STORAGE_KEY_RECORDS, []);
+export const getRecords = async (): Promise<AttendanceRecord[]> => {
+  const records = await getFromStorage<AttendanceRecord[]>(STORAGE_KEY_RECORDS, []);
+  // Sort by timestamp desc
+  return records.sort((a, b) => b.timestamp - a.timestamp);
 };
 
-export const saveRecord = (record: AttendanceRecord): void => {
-  const current = getRecords();
-  const updated = [record, ...current];
-  saveToStorage(STORAGE_KEY_RECORDS, updated);
+export const saveRecord = async (record: AttendanceRecord): Promise<void> => {
+  await saveDocument(STORAGE_KEY_RECORDS, record.id, record);
   
-  saveAuditLog({
+  await saveAuditLog({
     id: Date.now().toString(),
     action: record.type,
     user: record.workerName,
@@ -163,40 +247,39 @@ export const saveRecord = (record: AttendanceRecord): void => {
 };
 
 // --- Employees ---
-export const getEmployees = (): Employee[] => {
-  // TEST DATA INCLUDED HERE
+export const getEmployees = async (): Promise<Employee[]> => {
   const defaults: Employee[] = [
     { id: '1', name: 'مدير النظام', role: 'ADMIN', phone: '0500000000', status: 'Active', password: 'admin' },
     { id: '2', name: 'موظف تجربة', role: 'USER', phone: '0555555555', status: 'Active', password: '123' },
-    { id: '3', name: 'خالد المشرف', role: 'SUPERVISOR', phone: '0501112233', status: 'Active', password: '123' },
-    { id: '4', name: 'سالم العلي', role: 'USER', phone: '0509876543', status: 'Inactive', password: '123' },
   ];
+  
+  if (isFirebaseEnabled() && db) {
+    const snapshot = await getDocs(collection(db, STORAGE_KEY_EMPLOYEES));
+    if (snapshot.empty) {
+        // Optional: Seed defaults if empty
+        return [];
+    }
+    return snapshot.docs.map(d => d.data()) as Employee[];
+  }
+
   const data = localStorage.getItem(STORAGE_KEY_EMPLOYEES);
   if (!data) {
-    saveToStorage(STORAGE_KEY_EMPLOYEES, defaults);
+    localStorage.setItem(STORAGE_KEY_EMPLOYEES, JSON.stringify(defaults));
     return defaults;
   }
   return JSON.parse(data);
 };
 
-export const saveEmployee = (employee: Employee): void => {
-  const employees = getEmployees();
-  const index = employees.findIndex(e => e.id === employee.id);
-  if (index >= 0) {
-    employees[index] = employee;
-  } else {
-    employees.push(employee);
-  }
-  saveToStorage(STORAGE_KEY_EMPLOYEES, employees);
+export const saveEmployee = async (employee: Employee): Promise<void> => {
+  await saveDocument(STORAGE_KEY_EMPLOYEES, employee.id, employee);
 };
 
-export const deleteEmployee = (id: string): void => {
-  const employees = getEmployees().filter(e => e.id !== id);
-  saveToStorage(STORAGE_KEY_EMPLOYEES, employees);
+export const deleteEmployee = async (id: string): Promise<void> => {
+  await deleteDocument(STORAGE_KEY_EMPLOYEES, id);
 };
 
 // --- Geofences ---
-export const getGeofences = (): Geofence[] => {
+export const getGeofences = async (): Promise<Geofence[]> => {
   const defaults: Geofence[] = [{
     id: '1',
     name: "الورشة الرئيسية",
@@ -204,24 +287,19 @@ export const getGeofences = (): Geofence[] => {
     radiusMeters: 500,
     active: true
   }];
-  return getFromStorage<Geofence[]>(STORAGE_KEY_GEOFENCES, defaults);
+  return await getFromStorage<Geofence[]>(STORAGE_KEY_GEOFENCES, defaults);
 };
 
-export const saveGeofence = (geofence: Geofence): void => {
-  const list = getGeofences();
-  const index = list.findIndex(g => g.id === geofence.id);
-  if (index >= 0) list[index] = geofence;
-  else list.push(geofence);
-  saveToStorage(STORAGE_KEY_GEOFENCES, list);
+export const saveGeofence = async (geofence: Geofence): Promise<void> => {
+  await saveDocument(STORAGE_KEY_GEOFENCES, geofence.id, geofence);
 };
 
-export const deleteGeofence = (id: string): void => {
-  const list = getGeofences().filter(g => g.id !== id);
-  saveToStorage(STORAGE_KEY_GEOFENCES, list);
+export const deleteGeofence = async (id: string): Promise<void> => {
+  await deleteDocument(STORAGE_KEY_GEOFENCES, id);
 };
 
 // --- Schedules ---
-export const getWorkSchedules = (): WorkSchedule[] => {
+export const getWorkSchedules = async (): Promise<WorkSchedule[]> => {
   const defaults: WorkSchedule[] = [
     { 
       id: '1', 
@@ -233,70 +311,39 @@ export const getWorkSchedules = (): WorkSchedule[] => {
       days: ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'] 
     }
   ];
-  const data = localStorage.getItem(STORAGE_KEY_SCHEDULES);
-  if (!data) {
-    saveToStorage(STORAGE_KEY_SCHEDULES, defaults);
-    return defaults;
-  }
-  
-  try {
-    const parsed = JSON.parse(data);
-    // Migration check: Ensure structure matches WorkSchedule
-    if (Array.isArray(parsed) && parsed.length > 0 && !parsed[0].shifts && parsed[0].startTime) {
-       // Convert old data format if detected
-       return defaults;
-    }
-    return parsed;
-  } catch {
-    return defaults;
-  }
+  return await getFromStorage<WorkSchedule[]>(STORAGE_KEY_SCHEDULES, defaults);
 };
 
-export const saveWorkSchedule = (schedule: WorkSchedule): void => {
-  const list = getWorkSchedules();
-  const index = list.findIndex(s => s.id === schedule.id);
-  if (index >= 0) list[index] = schedule;
-  else list.push(schedule);
-  saveToStorage(STORAGE_KEY_SCHEDULES, list);
+export const saveWorkSchedule = async (schedule: WorkSchedule): Promise<void> => {
+  await saveDocument(STORAGE_KEY_SCHEDULES, schedule.id, schedule);
 };
 
-export const deleteWorkSchedule = (id: string): void => {
-  const list = getWorkSchedules().filter(s => s.id !== id);
-  saveToStorage(STORAGE_KEY_SCHEDULES, list);
+export const deleteWorkSchedule = async (id: string): Promise<void> => {
+  await deleteDocument(STORAGE_KEY_SCHEDULES, id);
 };
 
-// --- Calendar Events (Holidays/Custom Days) ---
-export const getCalendarEvents = (): CalendarEvent[] => {
-  return getFromStorage<CalendarEvent[]>(STORAGE_KEY_CALENDAR_EVENTS, []);
+// --- Calendar Events ---
+export const getCalendarEvents = async (): Promise<CalendarEvent[]> => {
+  return await getFromStorage<CalendarEvent[]>(STORAGE_KEY_CALENDAR_EVENTS, []);
 };
 
-export const saveCalendarEvent = (event: CalendarEvent): void => {
-  const list = getCalendarEvents();
-  const index = list.findIndex(e => e.id === event.id);
-  if (index >= 0) list[index] = event;
-  else list.push(event);
-  saveToStorage(STORAGE_KEY_CALENDAR_EVENTS, list);
+export const saveCalendarEvent = async (event: CalendarEvent): Promise<void> => {
+  await saveDocument(STORAGE_KEY_CALENDAR_EVENTS, event.id, event);
 };
 
-export const deleteCalendarEvent = (id: string): void => {
-  const list = getCalendarEvents().filter(e => e.id !== id);
-  saveToStorage(STORAGE_KEY_CALENDAR_EVENTS, list);
+export const deleteCalendarEvent = async (id: string): Promise<void> => {
+  await deleteDocument(STORAGE_KEY_CALENDAR_EVENTS, id);
 };
 
 // --- Leaves ---
-export const getLeaveRequests = (): LeaveRequest[] => {
-  const defaults: LeaveRequest[] = [
-    { id: '101', employeeId: '2', employeeName: 'موظف تجربة', startDate: '2023-11-20', endDate: '2023-11-22', reason: 'ظروف عائلية', status: 'Pending' }
-  ];
-  return getFromStorage<LeaveRequest[]>(STORAGE_KEY_LEAVES, defaults);
+export const getLeaveRequests = async (): Promise<LeaveRequest[]> => {
+  return await getFromStorage<LeaveRequest[]>(STORAGE_KEY_LEAVES, []);
 };
 
-export const saveNewLeaveRequest = (request: LeaveRequest): void => {
-  const list = getLeaveRequests();
-  const updated = [request, ...list];
-  saveToStorage(STORAGE_KEY_LEAVES, updated);
+export const saveNewLeaveRequest = async (request: LeaveRequest): Promise<void> => {
+  await saveDocument(STORAGE_KEY_LEAVES, request.id, request);
   
-  saveNotification({
+  await saveNotification({
     id: Date.now().toString(),
     title: 'طلب إجازة جديد',
     message: `قام الموظف ${request.employeeName} بتقديم طلب إجازة.`,
@@ -305,14 +352,22 @@ export const saveNewLeaveRequest = (request: LeaveRequest): void => {
   });
 };
 
-export const updateLeaveStatus = (id: string, status: 'Approved' | 'Rejected'): void => {
-  const list = getLeaveRequests();
-  const item = list.find(l => l.id === id);
+export const updateLeaveStatus = async (id: string, status: 'Approved' | 'Rejected'): Promise<void> => {
+  // Need to fetch item first to get name
+  let item: LeaveRequest | undefined;
+  if (isFirebaseEnabled() && db) {
+     const d = await getDocs(query(collection(db, STORAGE_KEY_LEAVES), where('id', '==', id)));
+     if (!d.empty) item = d.docs[0].data() as LeaveRequest;
+  } else {
+     const list = await getLeaveRequests();
+     item = list.find(l => l.id === id);
+  }
+
   if (item) {
     item.status = status;
-    saveToStorage(STORAGE_KEY_LEAVES, list);
+    await saveDocument(STORAGE_KEY_LEAVES, id, item);
     
-    saveNotification({
+    await saveNotification({
       id: Date.now().toString(),
       title: status === 'Approved' ? 'تمت الموافقة على الإجازة' : 'تم رفض الإجازة',
       message: `تم ${status === 'Approved' ? 'قبول' : 'رفض'} طلب الإجازة للموظف ${item.employeeName}`,
@@ -323,62 +378,59 @@ export const updateLeaveStatus = (id: string, status: 'Approved' | 'Rejected'): 
 };
 
 // --- Logs & Notifications ---
-export const getAuditLogs = (): AuditLog[] => getFromStorage<AuditLog[]>(STORAGE_KEY_LOGS, []);
-
-export const saveAuditLog = (log: AuditLog): void => {
-  const logs = getAuditLogs();
-  saveToStorage(STORAGE_KEY_LOGS, [log, ...logs].slice(0, 100)); // Keep last 100
+export const getAuditLogs = async (): Promise<AuditLog[]> => {
+  const logs = await getFromStorage<AuditLog[]>(STORAGE_KEY_LOGS, []);
+  return logs.sort((a,b) => b.timestamp - a.timestamp);
 };
 
-export const getNotifications = (): Notification[] => getFromStorage<Notification[]>(STORAGE_KEY_NOTIFICATIONS, []);
-
-export const saveNotification = (note: Notification): void => {
-  const notes = getNotifications();
-  saveToStorage(STORAGE_KEY_NOTIFICATIONS, [note, ...notes]);
+export const saveAuditLog = async (log: AuditLog): Promise<void> => {
+  await saveDocument(STORAGE_KEY_LOGS, log.id, log);
 };
 
-// --- NEW: Absence Check ---
-export const checkAndGenerateAbsenceAlerts = (): number => {
+export const getNotifications = async (): Promise<Notification[]> => {
+  const notes = await getFromStorage<Notification[]>(STORAGE_KEY_NOTIFICATIONS, []);
+  return notes.sort((a,b) => parseInt(b.id) - parseInt(a.id));
+};
+
+export const saveNotification = async (note: Notification): Promise<void> => {
+  await saveDocument(STORAGE_KEY_NOTIFICATIONS, note.id, note);
+};
+
+// --- CHECK: Absence ---
+export const checkAndGenerateAbsenceAlerts = async (): Promise<number> => {
   const today = new Date();
   
-  // Helper to get local date string YYYY-MM-DD
   const offset = today.getTimezoneOffset() * 60000;
   const todayStr = (new Date(today.getTime() - offset)).toISOString().slice(0, 10);
   
   const startOfDay = new Date(today.setHours(0,0,0,0)).getTime();
   const dayName = new Date().toLocaleDateString('ar-EG', { weekday: 'long' });
 
-  // 1. Check Calendar Events (Exceptions)
-  const calendarEvents = getCalendarEvents();
+  // Load Data Async
+  const calendarEvents = await getCalendarEvents();
   const todayEvent = calendarEvents.find(e => e.date === todayStr);
 
-  if (todayEvent?.type === 'HOLIDAY') {
-    return 0; // Holiday, no checks needed
-  }
+  if (todayEvent?.type === 'HOLIDAY') return 0;
 
-  // 2. Get Schedules
-  const allSchedules = getWorkSchedules();
-  // Filter schedules that are active today
+  const allSchedules = await getWorkSchedules();
   const todaySchedules = allSchedules.filter(s => s.days.includes(dayName));
 
   const isRegularWorkDay = allSchedules.length === 0 || todaySchedules.length > 0;
   const isExtraWorkDay = todayEvent?.type === 'EXTRA_WORKDAY';
 
-  // Determine if it's a workday
   if (!isRegularWorkDay && !isExtraWorkDay) return 0;
 
   let alertsGenerated = 0;
-  const employees = getEmployees().filter(e => e.status === 'Active');
-  const records = getRecords();
-  const leaves = getLeaveRequests();
-  const notifications = getNotifications();
+  const allEmployees = await getEmployees();
+  const employees = allEmployees.filter(e => e.status === 'Active');
+  const records = await getRecords();
+  const leaves = await getLeaveRequests();
+  const notifications = await getNotifications();
   const dateStrDisplay = new Date().toLocaleDateString('ar-EG');
 
-  // --- CHECK 1: ABSENCE (Missing Check-In Today) ---
   const now = new Date();
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
   
-  // Find all start times for today
   let activeShiftStartTimes: number[] = [];
   if (todaySchedules.length > 0) {
     todaySchedules.forEach(s => {
@@ -388,10 +440,9 @@ export const checkAndGenerateAbsenceAlerts = (): number => {
       });
     });
   } else {
-    activeShiftStartTimes.push(8 * 60); // 08:00 default
+    activeShiftStartTimes.push(8 * 60); 
   }
 
-  // Check if we are past any start time + 30 mins grace
   const pastShifts = activeShiftStartTimes.filter(start => currentMinutes > (start + 30));
   
   if (pastShifts.length > 0) {
@@ -401,11 +452,9 @@ export const checkAndGenerateAbsenceAlerts = (): number => {
         .map(r => r.workerName)
     );
 
-    employees.forEach(emp => {
-      // If present, skip
-      if (presentEmployeeNames.has(emp.name)) return;
+    for (const emp of employees) {
+      if (presentEmployeeNames.has(emp.name)) continue;
 
-      // Check if on approved leave
       const isOnLeave = leaves.some(l => 
         l.employeeName === emp.name && 
         l.status === 'Approved' &&
@@ -413,9 +462,8 @@ export const checkAndGenerateAbsenceAlerts = (): number => {
         new Date(l.endDate) >= new Date()
       );
 
-      if (isOnLeave) return;
+      if (isOnLeave) continue;
 
-      // Check if notification already exists for today to avoid spam
       const alreadyNotified = notifications.some(n => 
         n.title === 'تنبيه غياب' && 
         n.message.includes(emp.name) && 
@@ -423,7 +471,7 @@ export const checkAndGenerateAbsenceAlerts = (): number => {
       );
 
       if (!alreadyNotified) {
-        saveNotification({
+        await saveNotification({
           id: Date.now().toString() + Math.random().toString().substr(2, 5),
           title: 'تنبيه غياب',
           message: `الموظف ${emp.name} لم يسجل الحضور اليوم (${isExtraWorkDay ? 'دوام إضافي' : dayName}) حتى الآن.`,
@@ -432,10 +480,10 @@ export const checkAndGenerateAbsenceAlerts = (): number => {
         });
         alertsGenerated++;
       }
-    });
+    }
   }
 
-  // --- CHECK 2: MISSING CHECKOUT (Yesterday) ---
+  // Check Yesterday Missing Out
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
   yesterday.setHours(0,0,0,0);
@@ -443,28 +491,23 @@ export const checkAndGenerateAbsenceAlerts = (): number => {
   const yesterdayEnd = yesterdayStart + 86400000;
   const yesterdayDateStr = yesterday.toLocaleDateString('ar-EG');
   
-  // Filter yesterday's records
   const yesterdayRecords = records.filter(r => r.timestamp >= yesterdayStart && r.timestamp < yesterdayEnd);
 
-  employees.forEach(emp => {
-     // Get this employee's records for yesterday
+  for (const emp of employees) {
      const empRecs = yesterdayRecords.filter(r => r.workerName === emp.name).sort((a,b) => a.timestamp - b.timestamp);
      
      if (empRecs.length > 0) {
-        // Check if last record is CHECK_IN (means they forgot to checkout)
         const lastRecord = empRecs[empRecs.length - 1];
         if (lastRecord.type === 'CHECK_IN') {
-           
-           // Avoid duplicate notifications (we use Today's date for notification entry date to make it visible)
            const alreadyNotifiedMissingOut = notifications.some(n => 
              n.title === 'تنبيه عدم انصراف' && 
              n.message.includes(emp.name) && 
              n.message.includes(yesterdayDateStr) &&
-             n.date === dateStrDisplay // Notification created "today"
+             n.date === dateStrDisplay
            );
 
            if (!alreadyNotifiedMissingOut) {
-             saveNotification({
+             await saveNotification({
                id: Date.now().toString() + Math.random().toString().substr(2, 5),
                title: 'تنبيه عدم انصراف',
                message: `الموظف ${emp.name} لم يقم بتسجيل الانصراف ليوم أمس (${yesterdayDateStr}).`,
@@ -475,7 +518,7 @@ export const checkAndGenerateAbsenceAlerts = (): number => {
            }
         }
      }
-  });
+  }
 
   return alertsGenerated;
 };

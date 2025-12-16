@@ -16,7 +16,7 @@ export default function App() {
   const [userRole, setUserRole] = useState<UserRole>('USER');
   const [view, setView] = useState<ViewState>('HOME');
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
-  const [config, setConfig] = useState<WorkshopConfig>(getWorkshopConfig());
+  const [config, setConfig] = useState<WorkshopConfig | null>(null);
   const [workerName, setWorkerName] = useState('عامل 1');
   
   // Modals State
@@ -41,19 +41,27 @@ export default function App() {
       setUserRole(session.role);
       setIsAuthenticated(true);
     }
+    
+    // Initial Load Config
+    const loadConfig = async () => {
+        const c = await getWorkshopConfig();
+        setConfig(c);
+    };
+    loadConfig();
   }, []);
 
   // Automatic Absence Check for Admins
   useEffect(() => {
     let interval: any;
+    const runChecks = async () => {
+        if (isAuthenticated && userRole === 'ADMIN') {
+            await checkAndGenerateAbsenceAlerts();
+        }
+    };
+
     if (isAuthenticated && userRole === 'ADMIN') {
-      // Run immediately on login/load
-      checkAndGenerateAbsenceAlerts();
-      
-      // Then run every 5 minutes
-      interval = setInterval(() => {
-        checkAndGenerateAbsenceAlerts();
-      }, 5 * 60 * 1000);
+      runChecks();
+      interval = setInterval(runChecks, 5 * 60 * 1000);
     }
     return () => {
       if (interval) clearInterval(interval);
@@ -63,10 +71,13 @@ export default function App() {
   useEffect(() => {
     if (!isAuthenticated) return;
     
-    setRecords(getRecords());
+    const loadRecords = async () => {
+        setRecords(await getRecords());
+    };
+    loadRecords();
     
     // Start watching location
-    if (navigator.geolocation) {
+    if (navigator.geolocation && config) {
       const id = navigator.geolocation.watchPosition(
         (pos) => {
           const coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
@@ -83,7 +94,7 @@ export default function App() {
       );
       return () => navigator.geolocation.clearWatch(id);
     } else {
-      setLocationError('المتصفح لا يدعم تحديد الموقع');
+        if (!navigator.geolocation) setLocationError('المتصفح لا يدعم تحديد الموقع');
     }
   }, [config, isAuthenticated]); 
 
@@ -100,7 +111,7 @@ export default function App() {
     setIsAuthenticated(false);
     setView('HOME');
     setUserRole('USER');
-    setWorkerName(''); // Reset worker name
+    setWorkerName(''); 
   };
 
   // --- GPS Flow ---
@@ -126,10 +137,9 @@ export default function App() {
   };
 
   const handleQRScanSuccess = (decodedText: string) => {
-    if (decodedText === config.qrCodeValue) {
+    if (config && decodedText === config.qrCodeValue) {
       setShowQR(false);
       setVerificationMethod('QR');
-      // After verifying QR, ask for selfie to prove identity
       setShowCamera(true);
     } else {
       alert("كود QR غير صحيح أو لا ينتمي لهذه الورشة!");
@@ -137,8 +147,8 @@ export default function App() {
   };
 
   // --- Finalize Attendance ---
-  const handlePhotoCaptured = (imageData: string) => {
-    if (!pendingType) return;
+  const handlePhotoCaptured = async (imageData: string) => {
+    if (!pendingType || !config) return;
 
     let isVerified = false;
     let locationToSave = currentLoc || { latitude: 0, longitude: 0 };
@@ -146,7 +156,6 @@ export default function App() {
     if (verificationMethod === 'GPS') {
       isVerified = distanceToWork !== null && distanceToWork <= config.radiusMeters;
     } else {
-      // QR is considered verified location proof
       isVerified = true; 
     }
 
@@ -161,7 +170,7 @@ export default function App() {
       verificationMethod: verificationMethod
     };
 
-    saveRecord(newRecord);
+    await saveRecord(newRecord);
     setRecords([newRecord, ...records]);
     setShowCamera(false);
     setPendingType(null);
@@ -181,7 +190,7 @@ export default function App() {
         <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium ${
           locationError 
             ? 'bg-red-50 text-red-600' 
-            : (distanceToWork !== null && distanceToWork <= config.radiusMeters) 
+            : (distanceToWork !== null && config && distanceToWork <= config.radiusMeters) 
               ? 'bg-green-50 text-green-700' 
               : 'bg-orange-50 text-orange-700'
         }`}>
@@ -280,7 +289,7 @@ export default function App() {
             onNavigateToLeaves={() => setView('LEAVES')}
           />
         )}
-        {view === 'SETTINGS' && (
+        {view === 'SETTINGS' && config && (
           <SettingsView 
             currentConfig={config} 
             onConfigUpdate={setConfig} 

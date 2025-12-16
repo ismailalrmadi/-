@@ -13,8 +13,8 @@ const QRScanner: React.FC<QRScannerProps> = ({ onScanSuccess, onClose }) => {
   const isScanning = useRef<boolean>(false);
 
   useEffect(() => {
-    // @ts-ignore
-    const Html5Qrcode = window.Html5Qrcode;
+    // Accessing global script variable manually
+    const Html5Qrcode = (window as any).Html5Qrcode;
 
     if (!Html5Qrcode) {
       setError("المكتبة غير محملة. تأكد من الاتصال بالإنترنت.");

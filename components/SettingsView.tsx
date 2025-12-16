@@ -32,7 +32,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentConfig, onConfigUpda
 
   useEffect(() => {
     if (isAdmin) {
-      setCalendarEvents(getCalendarEvents());
+      const loadEvents = async () => {
+         setCalendarEvents(await getCalendarEvents());
+      };
+      loadEvents();
     }
   }, [isAdmin]);
 
@@ -48,7 +51,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentConfig, onConfigUpda
     setIsDirty(hasChanges);
   }, [name, lat, lng, radius, qrValue, workerName, currentConfig]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (isAdmin) {
       // 1. Save Config
       const newConfig: WorkshopConfig = {
@@ -60,12 +63,12 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentConfig, onConfigUpda
         radiusMeters: parseInt(radius),
         qrCodeValue: qrValue
       };
-      saveWorkshopConfig(newConfig);
+      await saveWorkshopConfig(newConfig);
       onConfigUpdate(newConfig);
 
       // 2. Save User Name (Persist to Employee DB)
       if (name !== workerName) {
-        const employees = getEmployees();
+        const employees = await getEmployees();
         const empIndex = employees.findIndex(e => e.name === workerName);
         
         if (empIndex >= 0) {
@@ -73,7 +76,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentConfig, onConfigUpda
             ...employees[empIndex],
             name: name
           };
-          saveEmployee(updatedEmployee);
+          await saveEmployee(updatedEmployee);
         }
         
         setWorkerName(name); 
@@ -87,7 +90,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentConfig, onConfigUpda
     setTimeout(() => setMessage(''), 3000);
   };
 
-  const handleAddEvent = () => {
+  const handleAddEvent = async () => {
     if (!newEventDate || !newEventName) {
       alert("يرجى إدخال التاريخ واسم المناسبة");
       return;
@@ -98,7 +101,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentConfig, onConfigUpda
       name: newEventName,
       type: newEventType
     };
-    saveCalendarEvent(newEvent);
+    await saveCalendarEvent(newEvent);
     setCalendarEvents([...calendarEvents, newEvent]);
     setNewEventName('');
     setNewEventDate('');
@@ -106,9 +109,9 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentConfig, onConfigUpda
     setTimeout(() => setMessage(''), 3000);
   };
 
-  const handleDeleteEvent = (id: string) => {
+  const handleDeleteEvent = async (id: string) => {
     if(window.confirm("هل أنت متأكد من الحذف؟")) {
-      deleteCalendarEvent(id);
+      await deleteCalendarEvent(id);
       setCalendarEvents(calendarEvents.filter(e => e.id !== id));
     }
   };

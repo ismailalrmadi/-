@@ -36,6 +36,9 @@ const DashboardView: React.FC<{ onBack: () => void; userRole: string }> = ({ onB
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [roleConfigs, setRoleConfigs] = useState<RoleConfig[]>([]);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+  
+  // Permissions State
+  const [userPermissions, setUserPermissions] = useState<string[]>([]);
 
   // Report State
   const [reportStartDate, setReportStartDate] = useState(() => {
@@ -52,24 +55,37 @@ const DashboardView: React.FC<{ onBack: () => void; userRole: string }> = ({ onB
   const [modalType, setModalType] = useState<'EMPLOYEE' | 'GEOFENCE' | 'SCHEDULE' | null>(null);
   const [editingItem, setEditingItem] = useState<any>(null);
 
-  // Load Data
+  // Load Data Async
   useEffect(() => {
-    setEmployees(getEmployees());
-    setRecords(getRecords());
-    setGeofences(getGeofences());
-    setLeaves(getLeaveRequests());
-    setNotifications(getNotifications());
-    setSchedules(getWorkSchedules());
-    setLogs(getAuditLogs());
-    setRoleConfigs(getRoleConfigs());
-    setCalendarEvents(getCalendarEvents());
-  }, [refreshKey]);
+    const loadAllData = async () => {
+        setEmployees(await getEmployees());
+        setRecords(await getRecords());
+        setGeofences(await getGeofences());
+        setLeaves(await getLeaveRequests());
+        setNotifications(await getNotifications());
+        setSchedules(await getWorkSchedules());
+        setLogs(await getAuditLogs());
+        setRoleConfigs(await getRoleConfigs());
+        setCalendarEvents(await getCalendarEvents());
+        
+        // Load Permissions
+        if (userRole === 'ADMIN') {
+            // All perms
+            setUserPermissions(['VIEW_OVERVIEW', 'MANAGE_EMPLOYEES', 'VIEW_ATTENDANCE', 'MANAGE_GEOFENCES', 'MANAGE_LEAVES', 'MANAGE_SCHEDULES', 'VIEW_REPORTS', 'VIEW_LOGS', 'MANAGE_ROLES']);
+        } else {
+            const configs = await getRoleConfigs();
+            const config = configs.find(c => c.role === userRole);
+            setUserPermissions(config ? config.permissions : []);
+        }
+    };
+    loadAllData();
+  }, [refreshKey, userRole]);
 
   const handleRefresh = () => setRefreshKey(prev => prev + 1);
 
   // --- Helper: Check Permission ---
   const can = (permission: Permission): boolean => {
-    return hasPermission(userRole, permission);
+    return userRole === 'ADMIN' || userPermissions.includes(permission);
   };
 
   // --- Navigation Items Configuration ---
@@ -88,8 +104,8 @@ const DashboardView: React.FC<{ onBack: () => void; userRole: string }> = ({ onB
 
   // --- Handlers ---
   
-  const handleCheckAbsence = () => {
-    const count = checkAndGenerateAbsenceAlerts();
+  const handleCheckAbsence = async () => {
+    const count = await checkAndGenerateAbsenceAlerts();
     if (count > 0) {
       alert(`تم رصد ${count} حالات غياب جديدة وإرسال تنبيهات.`);
     } else {
@@ -140,23 +156,23 @@ const DashboardView: React.FC<{ onBack: () => void; userRole: string }> = ({ onB
     setModalType(null);
   };
 
-  const handleDelete = (type: 'EMPLOYEE' | 'GEOFENCE' | 'SCHEDULE', id: string) => {
+  const handleDelete = async (type: 'EMPLOYEE' | 'GEOFENCE' | 'SCHEDULE', id: string) => {
     if (!window.confirm("هل أنت متأكد من الحذف؟")) return;
     
-    if (type === 'EMPLOYEE') deleteEmployee(id);
-    if (type === 'GEOFENCE') deleteGeofence(id);
-    if (type === 'SCHEDULE') deleteWorkSchedule(id);
+    if (type === 'EMPLOYEE') await deleteEmployee(id);
+    if (type === 'GEOFENCE') await deleteGeofence(id);
+    if (type === 'SCHEDULE') await deleteWorkSchedule(id);
     
     handleRefresh();
   };
 
-  const toggleEmployeeStatus = (emp: Employee) => {
+  const toggleEmployeeStatus = async (emp: Employee) => {
     const newStatus = emp.status === 'Active' ? 'Inactive' : 'Active';
-    saveEmployee({ ...emp, status: newStatus });
+    await saveEmployee({ ...emp, status: newStatus });
     handleRefresh();
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const id = editingItem.id || Date.now().toString();
     
@@ -169,7 +185,7 @@ const DashboardView: React.FC<{ onBack: () => void; userRole: string }> = ({ onB
         status: editingItem.status || 'Active',
         password: editingItem.password || '123456' // Default if not provided
       };
-      saveEmployee(newEmp);
+      await saveEmployee(newEmp);
     }
     else if (modalType === 'GEOFENCE') {
       const newGeo: Geofence = {
@@ -182,7 +198,7 @@ const DashboardView: React.FC<{ onBack: () => void; userRole: string }> = ({ onB
         radiusMeters: parseInt(editingItem.radiusMeters),
         active: editingItem.active !== false
       };
-      saveGeofence(newGeo);
+      await saveGeofence(newGeo);
     }
     else if (modalType === 'SCHEDULE') {
       const newSch: WorkSchedule = {
@@ -191,15 +207,15 @@ const DashboardView: React.FC<{ onBack: () => void; userRole: string }> = ({ onB
         shifts: editingItem.shifts,
         days: typeof editingItem.days === 'string' ? editingItem.days.split(',').map((d: string) => d.trim()) : (editingItem.days || [])
       };
-      saveWorkSchedule(newSch);
+      await saveWorkSchedule(newSch);
     }
 
     handleCloseModal();
     handleRefresh();
   };
 
-  const handleLeaveAction = (id: string, action: 'Approved' | 'Rejected') => {
-    updateLeaveStatus(id, action);
+  const handleLeaveAction = async (id: string, action: 'Approved' | 'Rejected') => {
+    await updateLeaveStatus(id, action);
     handleRefresh();
   };
 
@@ -207,7 +223,7 @@ const DashboardView: React.FC<{ onBack: () => void; userRole: string }> = ({ onB
     window.print();
   };
 
-  const handleRolePermissionChange = (roleName: string, permission: Permission) => {
+  const handleRolePermissionChange = async (roleName: string, permission: Permission) => {
     const updatedConfigs = roleConfigs.map(config => {
       if (config.role === roleName) {
         const hasPerm = config.permissions.includes(permission);
@@ -218,7 +234,7 @@ const DashboardView: React.FC<{ onBack: () => void; userRole: string }> = ({ onB
       }
       return config;
     });
-    saveRoleConfigs(updatedConfigs);
+    await saveRoleConfigs(updatedConfigs);
     setRoleConfigs(updatedConfigs);
   };
 
@@ -260,7 +276,6 @@ const DashboardView: React.FC<{ onBack: () => void; userRole: string }> = ({ onB
 
       // Iterate through each day in the range
       while (loopDate <= end) {
-        const dateStr = loopDate.toLocaleDateString('ar-EG');
         const dateISO = new Date(loopDate.getTime() - (loopDate.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
         const dayName = loopDate.toLocaleDateString('ar-EG', { weekday: 'long' });
 

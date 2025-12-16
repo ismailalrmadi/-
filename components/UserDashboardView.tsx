@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState, useEffect } from 'react';
 import { AttendanceRecord, AttendanceType, WorkSchedule, LeaveRequest, CalendarEvent } from '../types';
 import { getLeaveRequests, getWorkSchedules, getCalendarEvents } from '../services/storageService';
@@ -23,9 +22,12 @@ const UserDashboardView: React.FC<UserDashboardViewProps> = ({
   const [missingCheckoutAlert, setMissingCheckoutAlert] = useState<string | null>(null);
 
   useEffect(() => {
-    setSchedules(getWorkSchedules());
-    setCalendarEvents(getCalendarEvents());
-    setAllLeaves(getLeaveRequests());
+    const loadData = async () => {
+        setSchedules(await getWorkSchedules());
+        setCalendarEvents(await getCalendarEvents());
+        setAllLeaves(await getLeaveRequests());
+    };
+    loadData();
   }, []);
 
   // Check for missing checkout from yesterday on mount
