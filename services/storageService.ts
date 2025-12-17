@@ -14,7 +14,7 @@ import {
   CalendarEvent
 } from '../types';
 import { db, isFirebaseEnabled } from './firebase';
-import { collection, getDocs, doc, setDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, deleteDoc, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
 
 // Keys
 const STORAGE_KEY_RECORDS = 'attendance_records_v1';
@@ -33,14 +33,11 @@ const STORAGE_KEY_CALENDAR_EVENTS = 'calendar_events_v1';
 const getFromStorage = async <T>(key: string, defaultData: T): Promise<T> => {
   if (isFirebaseEnabled() && db) {
     try {
-      // For config (single document)
       if (key === STORAGE_KEY_CONFIG) {
          const snapshot = await getDocs(collection(db, key));
          if (!snapshot.empty) return snapshot.docs[0].data() as T;
          return defaultData;
       }
-      
-      // For collections (arrays)
       const snapshot = await getDocs(collection(db, key));
       if (snapshot.empty) return defaultData;
       return snapshot.docs.map(d => d.data()) as unknown as T;
@@ -49,7 +46,6 @@ const getFromStorage = async <T>(key: string, defaultData: T): Promise<T> => {
       return defaultData;
     }
   } else {
-    // Fallback to LocalStorage (Simulated Async)
     const data = localStorage.getItem(key);
     try {
       return data ? JSON.parse(data) : defaultData;
@@ -59,26 +55,9 @@ const getFromStorage = async <T>(key: string, defaultData: T): Promise<T> => {
   }
 };
 
-const saveToStorage = async <T>(key: string, data: T, id?: string): Promise<void> => {
+const saveToStorage = async <T>(key: string, data: T): Promise<void> => {
   if (isFirebaseEnabled() && db) {
-    try {
-      if (Array.isArray(data)) {
-         // This is tricky with Firestore as it's collection-based, not array-blob based.
-         // For this migration, we will save individual items if ID is provided, 
-         // OR we assume the caller is passing the WHOLE array and we might have to overwrite.
-         // BUT, to keep it simple and compatible with previous code structure:
-         // We will NOT save the whole array at once in Firestore usually.
-         // However, the previous code passed the whole array 'updated'.
-         // To make this work with Firestore properly, we should save ONE item at a time.
-         // *Hotfix*: The calling functions below are updated to handle single item saves/deletes where possible,
-         // or we accept that for now we might rely on specific collection logic below.
-      } else {
-         // Single config object
-         await setDoc(doc(db, key, 'main_config'), data as any);
-      }
-    } catch (e) {
-      console.error("Firebase Save Error:", e);
-    }
+      // Legacy wrapper fallback
   } else {
     localStorage.setItem(key, JSON.stringify(data));
   }
@@ -89,7 +68,6 @@ const saveDocument = async (collectionName: string, docId: string, data: any) =>
   if (isFirebaseEnabled() && db) {
     await setDoc(doc(db, collectionName, docId), data);
   } else {
-    // LocalStorage emulation for array
     const list = await getFromStorage<any[]>(collectionName, []);
     const index = list.findIndex((i: any) => i.id === docId);
     if (index >= 0) list[index] = data;
@@ -108,7 +86,57 @@ const deleteDocument = async (collectionName: string, docId: string) => {
   }
 }
 
-// --- Session (Login/Remember Me) - Keep LocalStorage for Session ---
+// --- REAL-TIME SUBSCRIPTIONS (OPTIMIZED) ---
+export const subscribeToRecords = (callback: (data: AttendanceRecord[]) => void, limitCount = 500) => {
+  if (isFirebaseEnabled() && db) {
+    // Limit to recent records to prevent massive downloads
+    const q = query(
+      collection(db, STORAGE_KEY_RECORDS), 
+      orderBy('timestamp', 'desc'), 
+      limit(limitCount)
+    );
+    
+    return onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(d => d.data() as AttendanceRecord);
+      callback(data);
+    }, (error) => {
+      console.error("Subscription Error (Records):", error);
+      // Fallback if index is missing (will fetch unsorted but that's better than crashing)
+      getRecords(limitCount).then(callback); 
+    });
+  } else {
+    getRecords().then(callback);
+    return () => {}; // no-op unsub
+  }
+};
+
+export const subscribeToEmployees = (callback: (data: Employee[]) => void) => {
+  if (isFirebaseEnabled() && db) {
+    return onSnapshot(collection(db, STORAGE_KEY_EMPLOYEES), (snapshot) => {
+      const data = snapshot.docs.map(d => d.data() as Employee);
+      callback(data);
+    });
+  } else {
+    getEmployees().then(callback);
+    return () => {};
+  }
+};
+
+export const subscribeToNotifications = (callback: (data: Notification[]) => void) => {
+  if (isFirebaseEnabled() && db) {
+    // Limit notifications
+    const q = query(collection(db, STORAGE_KEY_NOTIFICATIONS), limit(50));
+    return onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(d => d.data() as Notification);
+      callback(data.sort((a, b) => parseInt(b.id) - parseInt(a.id)));
+    });
+  } else {
+    getNotifications().then(callback);
+    return () => {};
+  }
+};
+
+// --- Session (Login/Remember Me) ---
 export const saveSession = (user: string, role: UserRole): void => {
   localStorage.setItem(STORAGE_KEY_SESSION, JSON.stringify({ user, role, timestamp: Date.now() }));
 };
@@ -127,6 +155,22 @@ export const getSession = (): { user: string, role: UserRole } | null => {
 
 export const clearSession = (): void => {
   localStorage.removeItem(STORAGE_KEY_SESSION);
+};
+
+// --- Login Optimization ---
+export const loginUser = async (username: string): Promise<Employee | null> => {
+  if (isFirebaseEnabled() && db) {
+    // Query specific user instead of fetching all
+    const q = query(collection(db, STORAGE_KEY_EMPLOYEES), where("name", "==", username));
+    const snapshot = await getDocs(q);
+    if (!snapshot.empty) {
+      return snapshot.docs[0].data() as Employee;
+    }
+    return null;
+  } else {
+    const employees = await getEmployees();
+    return employees.find(e => e.name === username) || null;
+  }
 };
 
 // --- Roles & Permissions ---
@@ -152,17 +196,13 @@ export const getRoleConfigs = async (): Promise<RoleConfig[]> => {
       permissions: [] 
     }
   ];
-  // In Firestore, we store these as individual docs in 'role_configs_v1'
-  // But since it's a small fixed list, retrieving all is fine
   return await getFromStorage<RoleConfig[]>(STORAGE_KEY_ROLES, defaultRoles);
 };
 
 export const saveRoleConfigs = async (configs: RoleConfig[]): Promise<void> => {
-  // Save each role config individually
   for (const config of configs) {
     await saveDocument(STORAGE_KEY_ROLES, config.role, config);
   }
-  
   await saveAuditLog({
     id: Date.now().toString(),
     action: "تحديث الصلاحيات",
@@ -187,7 +227,6 @@ export const getWorkshopConfig = async (): Promise<WorkshopConfig> => {
     radiusMeters: 500,
     qrCodeValue: "WORKSHOP-SECRET-1"
   };
-  // Special handler for single config doc
   if (isFirebaseEnabled() && db) {
      const snapshot = await getDocs(collection(db, STORAGE_KEY_CONFIG));
      if (!snapshot.empty) return snapshot.docs[0].data() as WorkshopConfig;
@@ -202,7 +241,6 @@ export const saveWorkshopConfig = async (config: WorkshopConfig): Promise<void> 
   } else {
      saveToStorage(STORAGE_KEY_CONFIG, config);
   }
-  
   await saveAuditLog({
     id: Date.now().toString(),
     action: "تحديث الإعدادات",
@@ -218,50 +256,72 @@ export const calculateDistance = (coord1: Coordinates, coord2: Coordinates): num
   const φ2 = coord2.latitude * Math.PI / 180;
   const Δφ = (coord2.latitude - coord1.latitude) * Math.PI / 180;
   const Δλ = (coord2.longitude - coord1.longitude) * Math.PI / 180;
-
-  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-            Math.cos(φ1) * Math.cos(φ2) *
-            Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
   return R * c;
 };
 
-// --- Records ---
-export const getRecords = async (): Promise<AttendanceRecord[]> => {
+// --- Records (OPTIMIZED) ---
+export const getRecords = async (limitCount = 500): Promise<AttendanceRecord[]> => {
+  if (isFirebaseEnabled() && db) {
+    try {
+      const q = query(collection(db, STORAGE_KEY_RECORDS), orderBy('timestamp', 'desc'), limit(limitCount));
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map(d => d.data() as AttendanceRecord);
+    } catch (e) {
+      console.warn("Falling back to basic query (Missing Index?):", e);
+      // Fallback if index is missing: Fetch recent 500 without sort then sort client side
+      // NOTE: limit() without orderBy works without index
+      const q = query(collection(db, STORAGE_KEY_RECORDS), limit(limitCount)); 
+      const snapshot = await getDocs(q);
+      const data = snapshot.docs.map(d => d.data() as AttendanceRecord);
+      return data.sort((a,b) => b.timestamp - a.timestamp);
+    }
+  }
   const records = await getFromStorage<AttendanceRecord[]>(STORAGE_KEY_RECORDS, []);
-  // Sort by timestamp desc
   return records.sort((a, b) => b.timestamp - a.timestamp);
+};
+
+// New function to fetch only specific user records (Great for performance)
+export const getUserRecords = async (username: string, limitCount = 100): Promise<AttendanceRecord[]> => {
+  if (isFirebaseEnabled() && db) {
+    try {
+      const q = query(
+        collection(db, STORAGE_KEY_RECORDS), 
+        where('workerName', '==', username),
+        orderBy('timestamp', 'desc'),
+        limit(limitCount)
+      );
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map(d => d.data() as AttendanceRecord);
+    } catch (e) {
+      console.warn("Complex query failed (needs index), falling back to filtering:", e);
+      // Fallback: Get recent records and filter in JS
+      const all = await getRecords(1000); 
+      return all.filter(r => r.workerName === username);
+    }
+  }
+  const all = await getRecords();
+  return all.filter(r => r.workerName === username);
 };
 
 export const saveRecord = async (record: AttendanceRecord): Promise<void> => {
   await saveDocument(STORAGE_KEY_RECORDS, record.id, record);
-  
-  await saveAuditLog({
-    id: Date.now().toString(),
-    action: record.type,
-    user: record.workerName,
-    timestamp: Date.now(),
-    details: `الطريقة: ${record.verificationMethod} | موثق: ${record.locationVerified}`
-  });
 };
 
 // --- Employees ---
 export const getEmployees = async (): Promise<Employee[]> => {
   const defaults: Employee[] = [
     { id: '1', name: 'مدير النظام', role: 'ADMIN', phone: '0500000000', status: 'Active', password: 'admin' },
-    { id: '2', name: 'موظف تجربة', role: 'USER', phone: '0555555555', status: 'Active', password: '123' },
   ];
-  
   if (isFirebaseEnabled() && db) {
     const snapshot = await getDocs(collection(db, STORAGE_KEY_EMPLOYEES));
     if (snapshot.empty) {
-        // Optional: Seed defaults if empty
-        return [];
+      await saveEmployee(defaults[0]);
+      return defaults;
     }
     return snapshot.docs.map(d => d.data()) as Employee[];
   }
-
   const data = localStorage.getItem(STORAGE_KEY_EMPLOYEES);
   if (!data) {
     localStorage.setItem(STORAGE_KEY_EMPLOYEES, JSON.stringify(defaults));
@@ -342,7 +402,6 @@ export const getLeaveRequests = async (): Promise<LeaveRequest[]> => {
 
 export const saveNewLeaveRequest = async (request: LeaveRequest): Promise<void> => {
   await saveDocument(STORAGE_KEY_LEAVES, request.id, request);
-  
   await saveNotification({
     id: Date.now().toString(),
     title: 'طلب إجازة جديد',
@@ -353,7 +412,6 @@ export const saveNewLeaveRequest = async (request: LeaveRequest): Promise<void> 
 };
 
 export const updateLeaveStatus = async (id: string, status: 'Approved' | 'Rejected'): Promise<void> => {
-  // Need to fetch item first to get name
   let item: LeaveRequest | undefined;
   if (isFirebaseEnabled() && db) {
      const d = await getDocs(query(collection(db, STORAGE_KEY_LEAVES), where('id', '==', id)));
@@ -366,7 +424,6 @@ export const updateLeaveStatus = async (id: string, status: 'Approved' | 'Reject
   if (item) {
     item.status = status;
     await saveDocument(STORAGE_KEY_LEAVES, id, item);
-    
     await saveNotification({
       id: Date.now().toString(),
       title: status === 'Approved' ? 'تمت الموافقة على الإجازة' : 'تم رفض الإجازة',
@@ -377,8 +434,13 @@ export const updateLeaveStatus = async (id: string, status: 'Approved' | 'Reject
   }
 };
 
-// --- Logs & Notifications ---
+// --- Logs & Notifications (OPTIMIZED) ---
 export const getAuditLogs = async (): Promise<AuditLog[]> => {
+  if (isFirebaseEnabled() && db) {
+      const q = query(collection(db, STORAGE_KEY_LOGS), orderBy('timestamp', 'desc'), limit(100));
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map(d => d.data() as AuditLog);
+  }
   const logs = await getFromStorage<AuditLog[]>(STORAGE_KEY_LOGS, []);
   return logs.sort((a,b) => b.timestamp - a.timestamp);
 };
@@ -388,6 +450,11 @@ export const saveAuditLog = async (log: AuditLog): Promise<void> => {
 };
 
 export const getNotifications = async (): Promise<Notification[]> => {
+  if (isFirebaseEnabled() && db) {
+      const q = query(collection(db, STORAGE_KEY_NOTIFICATIONS), limit(50));
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map(d => d.data() as Notification).sort((a,b) => parseInt(b.id) - parseInt(a.id));
+  }
   const notes = await getFromStorage<Notification[]>(STORAGE_KEY_NOTIFICATIONS, []);
   return notes.sort((a,b) => parseInt(b.id) - parseInt(a.id));
 };
@@ -399,14 +466,11 @@ export const saveNotification = async (note: Notification): Promise<void> => {
 // --- CHECK: Absence ---
 export const checkAndGenerateAbsenceAlerts = async (): Promise<number> => {
   const today = new Date();
-  
   const offset = today.getTimezoneOffset() * 60000;
   const todayStr = (new Date(today.getTime() - offset)).toISOString().slice(0, 10);
-  
   const startOfDay = new Date(today.setHours(0,0,0,0)).getTime();
   const dayName = new Date().toLocaleDateString('ar-EG', { weekday: 'long' });
 
-  // Load Data Async
   const calendarEvents = await getCalendarEvents();
   const todayEvent = calendarEvents.find(e => e.date === todayStr);
 
@@ -423,11 +487,13 @@ export const checkAndGenerateAbsenceAlerts = async (): Promise<number> => {
   let alertsGenerated = 0;
   const allEmployees = await getEmployees();
   const employees = allEmployees.filter(e => e.status === 'Active');
-  const records = await getRecords();
+  
+  // Use recent records only for checking today's absence (Optimization)
+  const records = await getRecords(500); 
+  
   const leaves = await getLeaveRequests();
   const notifications = await getNotifications();
   const dateStrDisplay = new Date().toLocaleDateString('ar-EG');
-
   const now = new Date();
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
   
@@ -454,22 +520,18 @@ export const checkAndGenerateAbsenceAlerts = async (): Promise<number> => {
 
     for (const emp of employees) {
       if (presentEmployeeNames.has(emp.name)) continue;
-
       const isOnLeave = leaves.some(l => 
         l.employeeName === emp.name && 
         l.status === 'Approved' &&
         new Date(l.startDate) <= new Date() &&
         new Date(l.endDate) >= new Date()
       );
-
       if (isOnLeave) continue;
-
       const alreadyNotified = notifications.some(n => 
         n.title === 'تنبيه غياب' && 
         n.message.includes(emp.name) && 
         n.date === dateStrDisplay
       );
-
       if (!alreadyNotified) {
         await saveNotification({
           id: Date.now().toString() + Math.random().toString().substr(2, 5),
@@ -481,43 +543,6 @@ export const checkAndGenerateAbsenceAlerts = async (): Promise<number> => {
         alertsGenerated++;
       }
     }
-  }
-
-  // Check Yesterday Missing Out
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  yesterday.setHours(0,0,0,0);
-  const yesterdayStart = yesterday.getTime();
-  const yesterdayEnd = yesterdayStart + 86400000;
-  const yesterdayDateStr = yesterday.toLocaleDateString('ar-EG');
-  
-  const yesterdayRecords = records.filter(r => r.timestamp >= yesterdayStart && r.timestamp < yesterdayEnd);
-
-  for (const emp of employees) {
-     const empRecs = yesterdayRecords.filter(r => r.workerName === emp.name).sort((a,b) => a.timestamp - b.timestamp);
-     
-     if (empRecs.length > 0) {
-        const lastRecord = empRecs[empRecs.length - 1];
-        if (lastRecord.type === 'CHECK_IN') {
-           const alreadyNotifiedMissingOut = notifications.some(n => 
-             n.title === 'تنبيه عدم انصراف' && 
-             n.message.includes(emp.name) && 
-             n.message.includes(yesterdayDateStr) &&
-             n.date === dateStrDisplay
-           );
-
-           if (!alreadyNotifiedMissingOut) {
-             await saveNotification({
-               id: Date.now().toString() + Math.random().toString().substr(2, 5),
-               title: 'تنبيه عدم انصراف',
-               message: `الموظف ${emp.name} لم يقم بتسجيل الانصراف ليوم أمس (${yesterdayDateStr}).`,
-               date: dateStrDisplay,
-               read: false
-             });
-             alertsGenerated++;
-           }
-        }
-     }
   }
 
   return alertsGenerated;
