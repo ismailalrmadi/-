@@ -38,12 +38,12 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onClose }) => 
         }
       } catch (err: any) {
         console.error("Camera Error:", err);
-        if (!retryWithAnyCamera && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError' || err.name === 'NotReadableError')) {
-           // Fallback to any available camera if specific facing mode fails
+        // Fallback strategies
+        if (!retryWithAnyCamera && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError' || err.name === 'NotReadableError' || err.message?.includes('device not found'))) {
            console.log("Falling back to any available camera...");
            startCamera(true);
         } else {
-           if (isMounted) setError('تعذر الوصول للكاميرا. يرجى التأكد من الصلاحيات.');
+           if (isMounted) setError('تعذر الوصول للكاميرا. يرجى التأكد من الصلاحيات وتوفر الكاميرا.');
         }
       }
     };
@@ -86,7 +86,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onClose }) => 
         {error ? (
           <div className="flex-1 flex flex-col items-center justify-center text-white px-4 text-center">
             <Camera size={48} className="mb-4 opacity-50" />
-            <p className="mb-4">{error}</p>
+            <p className="mb-4 text-red-400">{error}</p>
             <button onClick={onClose} className="bg-white text-black px-6 py-2 rounded-full font-bold">إغلاق</button>
           </div>
         ) : (

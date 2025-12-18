@@ -1,18 +1,11 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { AttendanceRecord, AttendanceType } from "../types";
 
-const initGemini = () => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-    console.error("API Key missing");
-    return null;
-  }
-  return new GoogleGenAI({ apiKey });
-};
-
+// Fixed: Optimized Gemini initialization and updated model to recommended gemini-3-flash-preview
 export const generateSmartReport = async (records: AttendanceRecord[], workerName: string): Promise<string> => {
-  const ai = initGemini();
-  if (!ai) return "عذراً، خدمة الذكاء الاصطناعي غير متوفرة حالياً.";
+  // Always initialize right before use with the provided API key as per guidelines
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   // Simplify records for the prompt to save tokens
   const simplifiedRecords = records.slice(0, 30).map(r => ({
@@ -38,10 +31,11 @@ export const generateSmartReport = async (records: AttendanceRecord[], workerNam
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview', // Recommended for basic text tasks
       contents: prompt,
     });
     
+    // Access .text property directly
     return response.text || "لم يتم إنشاء تقرير.";
   } catch (error) {
     console.error("Gemini Error:", error);
