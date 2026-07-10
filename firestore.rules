@@ -1,0 +1,142 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Helpers
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isStringSafe(val, maxLen) {
+      return val is string && val.size() <= maxLen;
+    }
+
+    // Entity Validations
+    function isValidClient(data) {
+      return data.keys().hasAll(['id', 'name', 'contactPerson', 'phone', 'lat', 'lng', 'address'])
+        && isStringSafe(data.id, 128)
+        && isStringSafe(data.name, 200)
+        && isStringSafe(data.contactPerson, 200)
+        && isStringSafe(data.phone, 50)
+        && data.lat is number
+        && data.lng is number
+        && isStringSafe(data.address, 500);
+    }
+
+    function isValidProject(data) {
+      return data.keys().hasAll(['id', 'name', 'clientId', 'description', 'status'])
+        && isStringSafe(data.id, 128)
+        && isStringSafe(data.name, 200)
+        && isStringSafe(data.clientId, 128)
+        && isStringSafe(data.description, 1000)
+        && data.status in ["planning", "active", "completed"];
+    }
+
+    function isValidTechnician(data) {
+      return data.keys().hasAll(['id', 'name', 'phone', 'avatar', 'status', 'vehicle', 'rating', 'currentLat', 'currentLng', 'color', 'shiftStart', 'shiftEnd'])
+        && isStringSafe(data.id, 128)
+        && isStringSafe(data.name, 200)
+        && isStringSafe(data.phone, 50)
+        && isStringSafe(data.avatar, 500)
+        && data.status in ["idle", "traveling", "working", "break"]
+        && isStringSafe(data.vehicle, 100)
+        && data.rating is number
+        && data.currentLat is number
+        && data.currentLng is number
+        && isStringSafe(data.color, 50)
+        && isStringSafe(data.shiftStart, 10)
+        && isStringSafe(data.shiftEnd, 10);
+    }
+
+    function isValidVisit(data) {
+      return data.keys().hasAll(['id', 'clientId', 'technicianId', 'title', 'type', 'status', 'date', 'plannedStartTime', 'plannedEndTime'])
+        && isStringSafe(data.id, 128)
+        && isStringSafe(data.clientId, 128)
+        && isStringSafe(data.technicianId, 128)
+        && isStringSafe(data.title, 200)
+        && data.type in ["Maintenance", "Installation", "Repair", "Inspection"]
+        && data.status in ["pending", "en_route", "checked_in", "completed", "delayed"]
+        && isStringSafe(data.date, 20)
+        && isStringSafe(data.plannedStartTime, 10)
+        && isStringSafe(data.plannedEndTime, 10);
+    }
+
+    function isValidRoute(data) {
+      return data.keys().hasAll(['id', 'technicianId', 'date', 'visitIds', 'totalDistanceKm', 'totalDurationMin'])
+        && isStringSafe(data.id, 128)
+        && isStringSafe(data.technicianId, 128)
+        && isStringSafe(data.date, 20)
+        && data.visitIds is list
+        && data.totalDistanceKm is number
+        && data.totalDurationMin is number;
+    }
+
+    function isValidLog(data) {
+      return data.keys().hasAll(['id', 'timestamp', 'technicianId', 'technicianName', 'action', 'type'])
+        && isStringSafe(data.id, 128)
+        && isStringSafe(data.timestamp, 50)
+        && isStringSafe(data.technicianId, 128)
+        && isStringSafe(data.technicianName, 200)
+        && isStringSafe(data.action, 1000)
+        && data.type in ["info", "success", "warning", "error"];
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'name', 'phone', 'role', 'status', 'lastActive'])
+        && isStringSafe(data.id, 128)
+        && isStringSafe(data.name, 200)
+        && isStringSafe(data.phone, 50)
+        && isStringSafe(data.role, 50)
+        && isStringSafe(data.status, 50)
+        && isStringSafe(data.lastActive, 100);
+    }
+
+    // Default-deny Catch-all Gate
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Collection matches
+    match /clients/{clientId} {
+      allow read: if true;
+      allow create, update: if isValidId(clientId) && isValidClient(request.resource.data);
+      allow delete: if isValidId(clientId);
+    }
+
+    match /projects/{projectId} {
+      allow read: if true;
+      allow create, update: if isValidId(projectId) && isValidProject(request.resource.data);
+      allow delete: if isValidId(projectId);
+    }
+
+    match /technicians/{technicianId} {
+      allow read: if true;
+      allow create, update: if isValidId(technicianId) && isValidTechnician(request.resource.data);
+      allow delete: if isValidId(technicianId);
+    }
+
+    match /visits/{visitId} {
+      allow read: if true;
+      allow create, update: if isValidId(visitId) && isValidVisit(request.resource.data);
+      allow delete: if isValidId(visitId);
+    }
+
+    match /routes/{routeId} {
+      allow read: if true;
+      allow create, update: if isValidId(routeId) && isValidRoute(request.resource.data);
+      allow delete: if isValidId(routeId);
+    }
+
+    match /logs/{logId} {
+      allow read: if true;
+      allow create, update: if isValidId(logId) && isValidLog(request.resource.data);
+      allow delete: if isValidId(logId);
+    }
+
+    match /users/{userId} {
+      allow read: if true;
+      allow create, update: if isValidId(userId) && isValidUser(request.resource.data);
+      allow delete: if isValidId(userId);
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "ARS Field Platform",
+  "description": "منصة ARS لرفع المقاسات وإدارة الميدان - الإصدار الأول: خدمات رفع مقاسات المطابخ، الأبواب، النوافذ، الرخام، والستائر في مدينة الرياض، المملكة العربية السعودية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

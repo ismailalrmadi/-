@@ -1,0 +1,1 @@
+sed -i 's/    technicians.forEach(tech => {/    technicians.forEach(tech => {\n      if (typeof tech.currentLat !== "number" || typeof tech.currentLng !== "number") return;/' src/components/MapContainer.tsx

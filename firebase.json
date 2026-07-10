@@ -1,0 +1,6 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "database": "ai-studio-arsfieldplatform-920f685a-b832-4b1b-bb5a-968b54e80111"
+  }
+}

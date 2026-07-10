@@ -1,0 +1,392 @@
+{
+  "entities": {
+    "Client": {
+      "title": "Client",
+      "description": "A customer or location where measurement lifting is done",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "contactPerson": {
+          "type": "string"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "lat": {
+          "type": "number"
+        },
+        "lng": {
+          "type": "number"
+        },
+        "address": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "contactPerson",
+        "phone",
+        "email",
+        "lat",
+        "lng",
+        "address"
+      ]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "A workspace project or campaign",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "planning",
+            "active",
+            "completed"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "clientId",
+        "description",
+        "status"
+      ]
+    },
+    "Technician": {
+      "title": "Technician",
+      "description": "Field technician conducting dimensions measurement",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "avatar": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "idle",
+            "traveling",
+            "working",
+            "break"
+          ]
+        },
+        "vehicle": {
+          "type": "string"
+        },
+        "rating": {
+          "type": "number"
+        },
+        "currentLat": {
+          "type": "number"
+        },
+        "currentLng": {
+          "type": "number"
+        },
+        "color": {
+          "type": "string"
+        },
+        "shiftStart": {
+          "type": "string"
+        },
+        "shiftEnd": {
+          "type": "string"
+        },
+        "breaks": {
+          "type": "array",
+          "description": "Shift breaks"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "phone",
+        "avatar",
+        "status",
+        "vehicle",
+        "rating",
+        "currentLat",
+        "currentLng",
+        "color",
+        "shiftStart",
+        "shiftEnd"
+      ]
+    },
+    "Visit": {
+      "title": "Visit",
+      "description": "A scheduled onsite visit",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "technicianId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "Maintenance",
+            "Installation",
+            "Repair",
+            "Inspection"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "en_route",
+            "checked_in",
+            "completed",
+            "delayed"
+          ]
+        },
+        "date": {
+          "type": "string"
+        },
+        "plannedStartTime": {
+          "type": "string"
+        },
+        "plannedEndTime": {
+          "type": "string"
+        },
+        "actualStartTime": {
+          "type": "string"
+        },
+        "actualEndTime": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "photoUrl": {
+          "type": "string"
+        },
+        "signatureUrl": {
+          "type": "string"
+        },
+        "delayReason": {
+          "type": "string"
+        },
+        "feedbackRating": {
+          "type": "number"
+        },
+        "feedbackComments": {
+          "type": "string"
+        },
+        "routeSequence": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "clientId",
+        "technicianId",
+        "title",
+        "type",
+        "status",
+        "date",
+        "plannedStartTime",
+        "plannedEndTime"
+      ]
+    },
+    "Route": {
+      "title": "Route",
+      "description": "Technician path routes",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "technicianId": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        },
+        "visitIds": {
+          "type": "array"
+        },
+        "totalDistanceKm": {
+          "type": "number"
+        },
+        "totalDurationMin": {
+          "type": "number"
+        },
+        "isFavorite": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "technicianId",
+        "date",
+        "visitIds",
+        "totalDistanceKm",
+        "totalDurationMin"
+      ]
+    },
+    "LogEntry": {
+      "title": "LogEntry",
+      "description": "System or driver activity log log entry",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "technicianId": {
+          "type": "string"
+        },
+        "technicianName": {
+          "type": "string"
+        },
+        "visitId": {
+          "type": "string"
+        },
+        "clientName": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "info",
+            "success",
+            "warning",
+            "error"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "timestamp",
+        "technicianId",
+        "technicianName",
+        "action",
+        "type"
+      ]
+    },
+    "AppUser": {
+      "title": "AppUser",
+      "description": "System user",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "lastActive": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "phone",
+        "role",
+        "status",
+        "lastActive"
+      ]
+    }
+  },
+  "firestore": {
+    "/clients/{clientId}": {
+      "schema": {
+        "$ref": "#/entities/Client"
+      },
+      "description": "List of clients and locations"
+    },
+    "/projects/{projectId}": {
+      "schema": {
+        "$ref": "#/entities/Project"
+      },
+      "description": "Active projects"
+    },
+    "/technicians/{technicianId}": {
+      "schema": {
+        "$ref": "#/entities/Technician"
+      },
+      "description": "Active technicians and statuses"
+    },
+    "/visits/{visitId}": {
+      "schema": {
+        "$ref": "#/entities/Visit"
+      },
+      "description": "Visits and task detail items"
+    },
+    "/routes/{routeId}": {
+      "schema": {
+        "$ref": "#/entities/Route"
+      },
+      "description": "Active driver routes"
+    },
+    "/logs/{logId}": {
+      "schema": {
+        "$ref": "#/entities/LogEntry"
+      },
+      "description": "Driver and scheduler log history"
+    },
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/AppUser"
+      },
+      "description": "System users"
+    }
+  }
+}
